@@ -23,6 +23,11 @@ Google Cloud Storage will contain the protected, restricted static content and w
 
 ## Detailed steps
 
+### create a service account with roles
+
+Via Firebase's console, one can create a Firebase Admin SDK service account. In the Google Cloud Console, you'll have to add the Storage Reader role.
+
+
 ### Rewrite rule for Cloud Run service
 
 if the Cloud Run service is 1) named `contentrouter`, 2_ is deployed in the region us-central1 and 3) you'd like to authenticate content under the URI `/content`, this is what your Firebase Hosting firebase.json should have added to it, for the `rewrites` rule.
@@ -54,15 +59,23 @@ export SERVICE_NAME=contentrouter
 export BUCKET=secret-bucket
 export FIREBASEPATH="content/"
 export GCSPATH="restricted/"
+export REDIRECTPATH="/index.html"
 
 gcloud run deploy ${SERVICE_NAME} --source . \ 
  --service-account ${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com \
  --set-env-vars "BUCKET=${BUCKET}" \
  --set-env-vars "FIREBASEPATH=${FIREBASEPATH}" \
  --set-env-vars "GCSPATH=${GCSPATH}" \
+ --set-env-vars "REDIRECTPATH=${REDIRECTPATH}" \
  --region ${REGION} \
  --allow-unauthenticated
 ```
+
+* SERVICE_NAME - required, Cloud Run service name, also referenced in firebase.json rewrite run rule
+* BUCKET - required, base GCS path, do not include "gs://"
+* FIREBASEPATH - the path in firebase.json that redirects to contentrouter
+* GCSPATH - the subdir within BUCKET where content is located
+* REDIRECTPATH - when user is unauthenticated, redirect back to this path, defaults to "/"
 
 ## What contentrouter does
 

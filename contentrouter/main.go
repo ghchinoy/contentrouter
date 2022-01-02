@@ -21,6 +21,7 @@ var (
 	bucket       string
 	firebasepath string
 	gcspath      string
+	redirectpath string
 )
 
 func main() {
@@ -44,8 +45,13 @@ func main() {
 		log.Printf("GCSPATH default to /")
 		gcspath = "/"
 	}
+	redirectpath = os.Getenv("REDIRECTPATH")
+	if redirectpath == "" {
+		redirectpath = "/"
+	}
 
 	r := mux.NewRouter()
+	r.HandleFunc("/config", ConfigHandler).Methods("GET")
 	r.HandleFunc(`/{route:[a-zA-Z0-9\.=\-\/]+}`, ContentRouter).Methods("GET")
 	http.Handle("/", r)
 
@@ -80,7 +86,7 @@ func ContentRouter(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("session cookie unable to be verified: %v", err)
 			w.WriteHeader(http.StatusForbidden)
-			http.Redirect(w, r, "/", http.StatusSeeOther)
+			http.Redirect(w, r, redirectpath, http.StatusSeeOther)
 		}
 		//log.Printf("token (from cookie): %s", t.Subject)
 
@@ -92,7 +98,7 @@ func ContentRouter(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" { // no token == not authenticated
 		//w.WriteHeader(http.StatusForbidden)
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, redirectpath, http.StatusSeeOther)
 	} else {
 		// check validity of token
 		app, err := firebase.NewApp(ctx, nil)
@@ -137,19 +143,24 @@ func ContentRouter(w http.ResponseWriter, r *http.Request) {
 
 // serveContent returns content
 func serveContent(ctx context.Context, w http.ResponseWriter, route string) {
-	filebytes, err := getFileAtRoute(ctx, route)
+	filebytes, contenttype, err := getFileAtRoute(ctx, route)
 	if err != nil {
 		w.Header().Add("content-type", "text/plain")
 		fmt.Fprintf(w, "couldn't find %s\n", route)
 		return
 	}
-	w.Header().Add("content-type", "text/html")
+	// set cache control to 5 min for both browser and CDN (max-age)
+	// and 10 min for CDN-caching
+	w.Header().Add("Cache-Control", "public, max-age=300, s-maxage=600")
+	w.Header().Add("content-type", contenttype)
+	//log.Printf("content-type: %s", contenttype)
 	w.Write(filebytes)
 }
 
 // getFileAtRoute retrieves a GCS bucket file given a filepath
-func getFileAtRoute(ctx context.Context, filepath string) ([]byte, error) {
+func getFileAtRoute(ctx context.Context, filepath string) ([]byte, string, error) {
 	var filedata []byte
+	var contenttype string
 
 	// need to expose as variable
 	filepath = strings.Replace(filepath, firebasepath, gcspath, -1)
@@ -157,16 +168,31 @@ func getFileAtRoute(ctx context.Context, filepath string) ([]byte, error) {
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		log.Printf("err storage client: %v", err)
-		return filedata, err
+		return filedata, contenttype, err
 	}
 	defer client.Close()
 
 	rc, err := client.Bucket(bucket).Object(filepath).NewReader(ctx)
 	if err != nil {
 		log.Printf("err bucket retrieval: %v", err)
-		return filedata, err
+		return filedata, contenttype, err
 	}
 	defer rc.Close()
 
-	return ioutil.ReadAll(rc)
+	contenttype = rc.Attrs.ContentType
+
+	filebytes, err := ioutil.ReadAll(rc)
+	if err != nil {
+		return filebytes, contenttype, err
+	}
+	return filebytes, contenttype, err
+}
+
+// ConfigHandler describes the configuration
+func ConfigHandler(w http.ResponseWriter, r *http.Request) {
+	config := fmt.Sprintf("REDIRECT: %s ; GCSPATH: %s ; FIREBASEPATH: %s ; BUCKET %s",
+		redirectpath, gcspath, firebasepath, bucket,
+	)
+	w.Header().Set("content-type", "text/plain")
+	w.Write([]byte(config))
 }
